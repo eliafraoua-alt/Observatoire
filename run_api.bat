@@ -5,6 +5,10 @@ echo Demarrage de l'API de l'Observatoire RPDF
 echo ===================================================
 cd /d "%~dp0"
 
+:: Forcer l'encodage UTF-8 pour Python sur Windows
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
+
 if not exist .venv (
     echo Erreur : L'environnement virtuel .venv n'a pas ete trouve.
     echo Veuillez le creer d'abord avec : python -m venv .venv

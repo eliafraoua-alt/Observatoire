@@ -5,6 +5,10 @@ echo Demarrage des Dashboards Streamlit de l'Observatoire
 echo ===================================================
 cd /d "%~dp0"
 
+:: Forcer l'encodage UTF-8 pour Python sur Windows
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
+
 if not exist .venv (
     echo Erreur : L'environnement virtuel .venv n'a pas ete trouve.
     pause
