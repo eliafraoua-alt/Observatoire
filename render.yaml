@@ -1,0 +1,14 @@
+services:
+  # ── API Backend (FastAPI) ───────────────────────────────────────────────────
+  - type: web
+    name: observatoire-api
+    env: python
+    buildCommand: pip install --upgrade pip && pip install -r api/requirements.txt -r ml/requirements.txt
+    startCommand: python -m uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DUCKDB_PATH
+        value: warehouse.duckdb
+      - key: API_KEY
+        value: changez-moi-avant-toute-mise-en-production
+      - key: API_CORS_ORIGINS
+        value: "https://share.streamlit.io,https://*.streamlit.app,http://localhost:8501"
