@@ -1,0 +1,47 @@
+version: 2
+
+models:
+  - name: mart_kpis_territoire
+    description: >
+      KPIs de synthèse du territoire — une seule ligne, calculée à partir
+      de l'ensemble des ZAE. Source de vérité destinée à terme à remplacer
+      la vue SQL brute v_kpis_territoire définie dans le DAG d'ingestion.
+    columns:
+      - name: emplois_zae_total
+        description: Somme des effectifs 2026 sur l'ensemble des ZAE
+        tests:
+          - not_null
+      - name: nb_zones
+        tests:
+          - not_null
+      - name: poids_zae_territoire_pct
+        description: >
+          Part de l'emploi en ZAE dans l'emploi total du territoire.
+          Calculé avec une constante en dur (179 000, source INSEE RP2021)
+          — voir le commentaire dans le modèle SQL pour la limite assumée.
+        tests:
+          - not_null
+
+  - name: mart_dynamique_zae
+    description: >
+      Table enrichie des ZAE avec catégorisation par taille (pôle majeur,
+      intermédiaire, petit pôle, micro-zone) et par tendance (croissance
+      forte/modérée, recul modéré/marqué). Reprend la typologie utilisée
+      dans le rapport d'analyse territoriale.
+    columns:
+      - name: zone
+        tests:
+          - not_null
+          - unique
+      - name: categorie_taille
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['pole_majeur', 'pole_intermediaire', 'petit_pole', 'micro_zone']
+      - name: categorie_tendance
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['forte_croissance', 'croissance_moderee', 'recul_modere', 'recul_marque']

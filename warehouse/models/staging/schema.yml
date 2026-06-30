@@ -1,0 +1,39 @@
+version: 2
+
+models:
+  - name: stg_emploi_zae
+    description: >
+      Table nettoyée des effectifs par ZAE, filtrée sur la source Nikonoff
+      2026 et débarrassée des lignes manifestement invalides.
+    columns:
+      - name: zone
+        description: Nom de la zone d'activité économique
+        tests:
+          - not_null
+      - name: commune
+        description: Commune de rattachement de la zone
+        tests:
+          - not_null
+      - name: effectif_2021
+        description: Effectif salarié estimé en 2021
+        tests:
+          - not_null
+      - name: effectif_2026
+        description: Effectif salarié estimé en 2026
+        tests:
+          - not_null
+      - name: etab_2021
+        tests:
+          - not_null
+      - name: etab_2026
+        tests:
+          - not_null
+
+  - name: stg_alertes_bodacc
+    description: Procédures collectives (BODACC) nettoyées, filtrées sur les communes renseignées.
+    columns:
+      - name: commune
+        tests:
+          - not_null
+      - name: alerte
+        description: Booléen — true si la procédure est une liquidation ou un redressement

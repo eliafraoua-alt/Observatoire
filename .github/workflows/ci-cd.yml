@@ -1,0 +1,154 @@
+name: CI/CD Observatoire RPDF
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: eu-west-3
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-west-3.amazonaws.com
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  # ── 1. Lint & Tests ──────────────────────────────────────────────────────────
+  test:
+    name: Tests et qualité de code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Installer les dépendances
+        run: |
+          pip install -r api/requirements.txt
+          pip install -r ml/requirements.txt
+          pip install feedparser beautifulsoup4
+          pip install pytest pytest-cov httpx ruff black mypy
+
+      - name: Lint (ruff)
+        run: ruff check api/ ingestion/ ml/ nlp/ --exit-zero
+
+      - name: Tests unitaires
+        run: pytest tests/ -v --tb=short --cov=api --cov=ml --cov-report=term-missing
+        env:
+          DUCKDB_PATH: ":memory:"
+          API_KEY: ""
+
+  # ── 2. Build & Push images Docker ────────────────────────────────────────────
+  build:
+    name: Build Docker
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-rpdf
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & Push API
+        run: |
+          docker build -t $ECR_REGISTRY/rpdf-api:$IMAGE_TAG ./api
+          docker push $ECR_REGISTRY/rpdf-api:$IMAGE_TAG
+          docker tag $ECR_REGISTRY/rpdf-api:$IMAGE_TAG $ECR_REGISTRY/rpdf-api:latest
+          docker push $ECR_REGISTRY/rpdf-api:latest
+
+      - name: Build & Push Dashboard
+        run: |
+          docker build -t $ECR_REGISTRY/rpdf-dashboard:$IMAGE_TAG ./dashboard
+          docker push $ECR_REGISTRY/rpdf-dashboard:$IMAGE_TAG
+          docker tag $ECR_REGISTRY/rpdf-dashboard:$IMAGE_TAG $ECR_REGISTRY/rpdf-dashboard:latest
+          docker push $ECR_REGISTRY/rpdf-dashboard:latest
+
+  # ── 3. Deploy sur ECS Fargate ─────────────────────────────────────────────
+  deploy:
+    name: Deploy ECS Fargate
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: production
+      url: https://observatoire.roissypaysdefrance.fr
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-rpdf
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.4"
+
+      - name: Terraform init
+        run: terraform init -backend-config="key=rpdf/prod/terraform.tfstate"
+        working-directory: infra/terraform
+
+      - name: Terraform plan
+        run: terraform plan -var="image_tag=${{ env.IMAGE_TAG }}" -out=tfplan
+        working-directory: infra/terraform
+        env:
+          TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          TF_VAR_ecr_registry: ${{ env.ECR_REGISTRY }}
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve tfplan
+        working-directory: infra/terraform
+
+      - name: Forcer redéploiement ECS
+        run: |
+          aws ecs update-service \
+            --cluster rpdf-observatoire \
+            --service rpdf-api \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+
+          aws ecs update-service \
+            --cluster rpdf-observatoire \
+            --service rpdf-dashboard \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Health check post-déploiement
+        run: |
+          sleep 30
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api.observatoire.roissypaysdefrance.fr/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "Health check échoué : HTTP $STATUS"
+            exit 1
+          fi
+          echo "✅ Déploiement réussi"
+
+      - name: Notification Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} Deploy RPDF Observatoire — ${{ github.sha }} — ${{ job.status }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

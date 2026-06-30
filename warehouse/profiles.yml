@@ -1,0 +1,11 @@
+observatoire_rpdf:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', '/data/warehouse.duckdb') }}"
+      threads: 4
+    prod:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH') }}"
+      threads: 8
