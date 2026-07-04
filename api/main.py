@@ -19,6 +19,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 DB_PATH = os.environ.get("DUCKDB_PATH", "/data/warehouse.duckdb")
+
+# Connexion partagée — initialisée par le lifespan, réutilisée par get_db().
+# Nécessaire pour :memory: où chaque duckdb.connect() crée une base différente.
+_shared_con: "duckdb.DuckDBPyConnection | None" = None
 API_KEY = os.environ.get("API_KEY", "")
 CORS_ORIGINS = [
     o.strip() for o in os.environ.get(
@@ -50,16 +54,20 @@ def require_api_key(provided_key: str = Security(_api_key_header)) -> None:
 
 def get_db() -> duckdb.DuckDBPyConnection:
     """
-    Retourne une nouvelle connexion DuckDB en lecture seule par requête.
-    Chaque requête HTTP obtient sa propre connexion — thread-safe.
-    L'appelant est responsable de fermer la connexion (via try/finally).
+    Retourne la connexion DuckDB active.
+    Si le lifespan a initialisé une connexion partagée (_shared_con), on la
+    retourne — indispensable pour :memory: où chaque connect() crée une base vide.
+    Sinon on ouvre une nouvelle connexion au fichier DB_PATH.
     """
+    if _shared_con is not None:
+        return _shared_con
     return duckdb.connect(DB_PATH, read_only=False)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Init DuckDB au démarrage et injection des données mock si vides."""
+    global _shared_con
     import logging
     logger = logging.getLogger("observatoire-api")
 
@@ -70,17 +78,17 @@ async def lifespan(app: FastAPI):
             "en production sans définir API_KEY (voir .env.example)."
         )
 
-    # Schéma et seeding nécessitent une connexion en écriture — uniquement au
-    # démarrage, avant que l'API ne serve des requêtes.
-    # Le seeding mock est conditionné à SEED_MOCK=true pour ne jamais injecter
-    # des données de test en production par erreur.
+    # Ouvre la connexion partagée — réutilisée par tous les endpoints via get_db().
+    # Indispensable pour :memory: où chaque connect() crée une base différente.
     SEED_MOCK = os.environ.get("SEED_MOCK", "false").lower() == "true"
-    with duckdb.connect(DB_PATH, read_only=False) as con_init:
-        _ensure_schema(con_init)
-        if SEED_MOCK:
-            _seed_mock_if_empty(con_init)
+    _shared_con = duckdb.connect(DB_PATH, read_only=False)
+    _ensure_schema(_shared_con)
+    if SEED_MOCK:
+        _seed_mock_if_empty(_shared_con)
     yield
-    # Pas de singleton à fermer — chaque requête gère sa propre connexion.
+    if _shared_con is not None:
+        _shared_con.close()
+        _shared_con = None
 
 
 app = FastAPI(
