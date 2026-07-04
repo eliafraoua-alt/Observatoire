@@ -22,6 +22,7 @@ def client_sans_auth(monkeypatch):
     """Client de test avec authentification désactivée (API_KEY vide)."""
     monkeypatch.setenv("DUCKDB_PATH", ":memory:")
     monkeypatch.setenv("API_KEY", "")
+    monkeypatch.setenv("SEED_MOCK", "true")
     # Recharge le module pour que les variables d'environnement soient relues
     if "main" in sys.modules:
         del sys.modules["main"]
@@ -35,6 +36,7 @@ def client_avec_auth(monkeypatch):
     """Client de test avec authentification activée, clé connue."""
     monkeypatch.setenv("DUCKDB_PATH", ":memory:")
     monkeypatch.setenv("API_KEY", "cle-de-test-12345")
+    monkeypatch.setenv("SEED_MOCK", "true")
     if "main" in sys.modules:
         del sys.modules["main"]
     import main

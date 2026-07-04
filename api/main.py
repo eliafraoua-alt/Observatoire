@@ -183,11 +183,11 @@ def get_kpis():
         raise HTTPException(404, "Aucune donnée ZAE disponible — lancez le pipeline Airflow")
 
     return KPIs(
-        emplois_zae_total=int(row[0]),
-        nb_zones=int(row[1]),
+        emplois_zae_total=int(row[0] or 0),
+        nb_zones=int(row[1] or 0),
         evolution_moy_pct=float(row[2] or 0),
-        zones_en_croissance=int(row[3]),
-        zones_en_alerte=int(row[4]),
+        zones_en_croissance=int(row[3] or 0),
+        zones_en_alerte=int(row[4] or 0),
         poids_zae_territoire_pct=float(row[5] or 0),
         date_extraction=date.today().isoformat(),
     )
