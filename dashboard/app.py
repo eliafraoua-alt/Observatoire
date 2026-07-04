@@ -22,7 +22,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── CSS maison ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
   .kpi-card {
@@ -42,6 +41,15 @@ st.markdown("""
     background: #D9EFE0; color: #1F6B35;
     border-radius: 6px; padding: 2px 10px; font-size: 0.8rem;
   }
+  .bodacc-card {
+    background: #fff8f8;
+    border-left: 4px solid #A8001C;
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.5rem;
+  }
+  .bodacc-denomination { font-weight: 600; color: #1B2A4A; }
+  .bodacc-meta { font-size: 0.8rem; color: #595959; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -79,17 +87,31 @@ def fetch_signaux():
         return {}
 
 
-@st.cache_data(ttl=300)
-def fetch_alertes():
+@st.cache_data(ttl=60)
+def fetch_alertes(limit=100):
     try:
-        return pd.DataFrame(requests.get(f"{API_URL}/alertes", timeout=10, headers=_HEADERS).json())
+        resp = requests.get(
+            f"{API_URL}/alertes",
+            params={"limit": limit},
+            timeout=10,
+            headers=_HEADERS
+        )
+        return pd.DataFrame(resp.json())
     except Exception:
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300)
+def fetch_bodacc_stats():
+    """Récupère les statistiques BODACC directement via l'API /signaux."""
+    try:
+        return requests.get(f"{API_URL}/signaux", timeout=10, headers=_HEADERS).json()
+    except Exception:
+        return {}
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.image("https://via.placeholder.com/200x60?text=RPDF", use_column_width=True)
     st.markdown("## 🗺 Filtres")
     commune_filtre = st.text_input("Commune", placeholder="Ex : Gonesse")
     evol_min = st.slider("Évolution min (%)", -100, 0, -100)
@@ -133,7 +155,7 @@ if kpis:
     with col3:
         delta_color = "normal" if kpis["evolution_moy_pct"] >= 0 else "inverse"
         st.metric("Évol. moy.", f"{kpis['evolution_moy_pct']:+.1f} %",
-                  delta=f"vs 2021 (COVID)", delta_color=delta_color)
+                  delta="vs 2021 (COVID)", delta_color=delta_color)
     with col4:
         st.metric("Zones en croissance", kpis["zones_en_croissance"],
                   delta=f"sur {kpis['nb_zones']} zones")
@@ -168,10 +190,7 @@ with tab1:
         col_a, col_b = st.columns([3, 2])
 
         with col_a:
-            # Graphique barres — top 15 zones
             top15 = df.nlargest(15, "effectif_2026")
-            colors = ["#A8001C" if e < -20 else "#1F6B35" if e > 20 else "#2E5597"
-                      for e in top15["evolution_pct"]]
             fig = px.bar(
                 top15,
                 x="effectif_2026",
@@ -188,7 +207,6 @@ with tab1:
             st.plotly_chart(fig, use_container_width=True)
 
         with col_b:
-            # Scatter évolution vs taille
             fig2 = px.scatter(
                 df,
                 x="evolution_pct",
@@ -206,7 +224,6 @@ with tab1:
             fig2.add_vline(x=0, line_dash="dash", line_color="#595959", opacity=0.5)
             st.plotly_chart(fig2, use_container_width=True)
 
-        # Tableau filtrable
         st.markdown("#### Détail par zone")
 
         def color_evol(val):
@@ -222,12 +239,11 @@ with tab1:
         df_display.columns = ["Zone", "Commune", "Emplois 2021", "Emplois 2026",
                                "Évol. %", "Étab. 2021", "Étab. 2026"]
         st.dataframe(
-            df_display.style.applymap(color_evol, subset=["Évol. %"]).format({"Évol. %": "{:.1f}"}),
+            df_display.style.map(color_evol, subset=["Évol. %"]).format({"Évol. %": "{:.1f}"}),
             use_container_width=True,
             height=400,
         )
 
-        # Export
         csv_bytes = df_display.to_csv(index=False, sep=";").encode("utf-8-sig")
         st.download_button("⬇️ Exporter CSV", csv_bytes, "zae_rpdf.csv", "text/csv")
 
@@ -269,21 +285,117 @@ with tab2:
                 title="Zones à forte croissance 2021–2026 (>20%, effectif >100)",
             )
             st.plotly_chart(fig3, use_container_width=True)
+        else:
+            st.info("Aucune zone en forte croissance détectée.")
 
 
 # ─── TAB 3 : Alertes BODACC ───────────────────────────────────────────────────
 with tab3:
-    alertes = fetch_alertes()
+    st.markdown("#### 🚨 Procédures collectives — Val-d'Oise (95) & Seine-et-Marne (77)")
+    st.caption("Source : BODACC (Bulletin Officiel des Annonces Civiles et Commerciales) — mis à jour quotidiennement")
+
+    # Filtres
+    col_f1, col_f2, col_f3 = st.columns(3)
+    with col_f1:
+        type_filtre = st.selectbox(
+            "Type d'annonce",
+            ["Tous", "Procédures collectives", "Ventes et cessions",
+             "Créations", "Modifications diverses", "Radiations", "Dépôts des comptes"],
+            key="type_bodacc"
+        )
+    with col_f2:
+        dept_filtre = st.selectbox("Département", ["Tous", "95 - Val-d'Oise", "77 - Seine-et-Marne"],
+                                   key="dept_bodacc")
+    with col_f3:
+        nb_alertes = st.slider("Nombre d'annonces à afficher", 20, 200, 50, key="nb_bodacc")
+
+    alertes = fetch_alertes(limit=nb_alertes)
+
     if alertes.empty:
-        st.info("Aucune alerte BODACC sur le territoire (liquidation / redressement).")
+        st.info("Aucune alerte BODACC disponible. Le scraper sera lancé au prochain démarrage.")
     else:
-        st.warning(f"🚨 {len(alertes)} procédure(s) collective(s) détectée(s) sur RPDF")
-        st.dataframe(alertes, use_container_width=True)
+        # Statistiques globales
+        nb_procedures = len(alertes[alertes.get("type_avis", pd.Series()).str.contains(
+            "Procédures|proc", case=False, na=False
+        )]) if "type_avis" in alertes.columns else 0
+
+        col_b1, col_b2, col_b3 = st.columns(3)
+        with col_b1:
+            st.metric("Total alertes affichées", len(alertes))
+        with col_b2:
+            st.metric("Procédures collectives", nb_procedures,
+                      delta="liquidations & redressements", delta_color="inverse")
+        with col_b3:
+            if "date_parution" in alertes.columns:
+                date_max = alertes["date_parution"].max()
+                st.metric("Dernière mise à jour", str(date_max)[:10] if date_max else "N/A")
+
+        st.divider()
+
+        # Affichage enrichi des procédures collectives
+        if "type_avis" in alertes.columns:
+            proc_coll = alertes[alertes["type_avis"].str.contains(
+                "Procédures|proc|liquidation|redressement|sauvegarde",
+                case=False, na=False
+            )]
+            if not proc_coll.empty:
+                st.markdown(f"##### 🔴 {len(proc_coll)} procédure(s) collective(s)")
+                for _, row in proc_coll.head(20).iterrows():
+                    denom = row.get("denomination", "Entreprise inconnue") or "Entreprise inconnue"
+                    commune = row.get("commune", "") or ""
+                    cp = row.get("cp", "") or ""
+                    type_avis = row.get("type_avis", "") or ""
+                    date_p = str(row.get("date_parution", ""))[:10]
+                    siret = row.get("siret", "") or ""
+
+                    st.markdown(f"""
+<div class="bodacc-card">
+  <div class="bodacc-denomination">🏢 {denom}</div>
+  <div class="bodacc-meta">
+    📍 {commune} ({cp}) &nbsp;|&nbsp;
+    ⚖️ {type_avis} &nbsp;|&nbsp;
+    📅 {date_p}
+    {"&nbsp;|&nbsp; SIRET : " + siret if siret else ""}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+        st.divider()
+
+        # Tableau complet filtrable
+        st.markdown("##### Toutes les alertes")
+        df_alertes_display = alertes.copy()
+        if "alerte" in df_alertes_display.columns:
+            df_alertes_display = df_alertes_display.drop(columns=["alerte"])
+
+        rename_map = {
+            "denomination": "Entreprise",
+            "commune": "Commune",
+            "cp": "Code postal",
+            "type_avis": "Type d'annonce",
+            "date_parution": "Date parution",
+            "siret": "SIRET",
+            "source": "Source",
+        }
+        df_alertes_display = df_alertes_display.rename(
+            columns={k: v for k, v in rename_map.items() if k in df_alertes_display.columns}
+        )
+
+        st.dataframe(df_alertes_display, use_container_width=True, height=350)
+
+        # Export
+        csv_alertes = df_alertes_display.to_csv(index=False, sep=";").encode("utf-8-sig")
+        st.download_button(
+            "⬇️ Exporter les alertes CSV",
+            csv_alertes,
+            "alertes_bodacc.csv",
+            "text/csv"
+        )
 
     st.markdown("""
     ---
-    **Source** : BODACC (Bulletin Officiel des Annonces Civiles et Commerciales), mis à jour quotidiennement.
-    Filtrage automatique sur les codes postaux des communes membres de CA-RPDF.
+    **Source** : BODACC — Val-d'Oise (95) et Seine-et-Marne (77).
+    Mise à jour automatique au démarrage de l'application (30 derniers jours).
     """)
 
 
@@ -294,7 +406,7 @@ with tab4:
     df_zae = fetch_zae()
     if not df_zae.empty:
         zone_sel = st.selectbox("Sélectionner une zone", df_zae["zone"].tolist())
-        horizon  = st.slider("Horizon de prévision (années)", 1, 10, 5)
+        horizon = st.slider("Horizon de prévision (années)", 1, 10, 5)
 
         if st.button("Calculer la projection"):
             try:
@@ -308,7 +420,7 @@ with tab4:
                 st.info(f"⚠️ {prev.get('avertissement', '')}")
 
                 historique = pd.DataFrame([
-                    {"annee": 2021, "emplois": df_zae[df_zae["zone"]==zone_sel]["effectif_2021"].values[0]},
+                    {"annee": 2021, "emplois": df_zae[df_zae["zone"] == zone_sel]["effectif_2021"].values[0]},
                     {"annee": 2026, "emplois": prev["effectif_2026"]},
                 ])
                 projections = pd.DataFrame(prev["projections"]).rename(
@@ -349,11 +461,9 @@ with tab5:
     st.markdown("#### Prédictions par Machine Learning — avec explications")
     st.caption(
         "Modèles entraînés sur l'ensemble des 67 zones (apprentissage transversal). "
-        "Chaque prédiction est accompagnée de ses facteurs explicatifs (SHAP) — "
-        "aucun score n'est affiché sans justification."
+        "Chaque prédiction est accompagnée de ses facteurs explicatifs (SHAP)."
     )
 
-    # Statut des modèles
     try:
         ml_status = requests.get(f"{API_URL}/ml/status", timeout=10, headers=_HEADERS).json()
         cols_status = st.columns(3)
@@ -371,14 +481,13 @@ with tab5:
                 else:
                     st.warning(f"⏳ {labels.get(key, key)} — non entraîné")
     except Exception:
-        st.error("API ML non disponible. Lancez le DAG observatoire_rpdf_ml_training.")
+        st.error("API ML non disponible.")
 
     st.divider()
 
     df_zae_ml = fetch_zae()
     if not df_zae_ml.empty:
         zone_ml = st.selectbox("Zone à analyser", df_zae_ml["zone"].tolist(), key="zone_ml")
-
         ml_col1, ml_col2, ml_col3 = st.columns(3)
 
         with ml_col1:
@@ -389,11 +498,8 @@ with tab5:
                     if resp.status_code == 200:
                         data = resp.json()
                         pred = data["prediction"]
-                        st.metric(
-                            "Évolution projetée (P50)",
-                            f"{pred['evolution_pct_p50']:+.1f}%",
-                            help=f"Intervalle : {pred['intervalle_confiance']}"
-                        )
+                        st.metric("Évolution projetée (P50)", f"{pred['evolution_pct_p50']:+.1f}%",
+                                  help=f"Intervalle : {pred['intervalle_confiance']}")
                         st.caption(f"Incertitude : {pred['intervalle_confiance']}")
                         st.markdown("**Facteurs explicatifs :**")
                         for exp in data["explications"]:
@@ -412,11 +518,9 @@ with tab5:
                         data = resp.json()
                         score = data["score"]
                         couleur = {"élevé": "🔴", "modéré": "🟡", "faible": "🟢"}
-                        st.metric(
-                            "Niveau de risque",
-                            f"{couleur.get(score['niveau_risque'],'')} {score['niveau_risque']}",
-                            help=f"Probabilité : {score['probabilite_risque']*100:.0f}%"
-                        )
+                        st.metric("Niveau de risque",
+                                  f"{couleur.get(score['niveau_risque'],'')} {score['niveau_risque']}",
+                                  help=f"Probabilité : {score['probabilite_risque']*100:.0f}%")
                         st.caption(f"⚠️ {data.get('avertissement', '')}")
                         st.markdown("**Facteurs explicatifs :**")
                         for exp in data["explications"]:
@@ -451,24 +555,17 @@ with tab5:
     with st.expander("📋 Méthodologie et limites des modèles ML"):
         st.markdown("""
         **Prévision d'emploi** — LightGBM en régression quantile, entraîné sur
-        les 67 zones (apprentissage transversal, pas de série temporelle classique
-        car seulement 2 points historiques par zone). Validation en Leave-One-Out
-        — seule méthode fiable avec un échantillon de cette taille. Le résultat
-        est systématiquement un intervalle [P10, P90], jamais un chiffre unique.
+        les 67 zones. Validation en Leave-One-Out. Le résultat est
+        systématiquement un intervalle [P10, P90], jamais un chiffre unique.
 
-        **Risque de défaillance** — XGBoost entraîné sur un *proxy* de cible
-        (zones dégradées + alertes BODACC), faute d'historique de défaillances
-        réelles suffisant. À traiter comme un indicateur d'attention, pas un
-        verdict. La fiabilité s'améliorera mécaniquement avec l'accumulation
+        **Risque de défaillance** — XGBoost entraîné sur un proxy de cible
+        (zones dégradées + alertes BODACC). À traiter comme un indicateur
+        d'attention, pas un verdict. La fiabilité s'améliorera avec l'accumulation
         de données BODACC dans le temps.
 
         **Dévitalisation commerciale** — Gradient Boosting sur les zones à
-        dominante commerce, cible également proxée en l'absence d'enquête
-        terrain. Le module 5 de l'observatoire (enquête panel entreprises
-        annuelle) doit être priorisé pour obtenir une vraie variable de
-        vacance commerciale et fiabiliser ce modèle.
+        dominante commerce. Cible proxée en l'absence d'enquête terrain.
 
         **Explicabilité** — Toutes les prédictions sont accompagnées des
-        facteurs SHAP (ou feature importance en repli) qui les expliquent,
-        traduits en langage non technique.
+        facteurs SHAP traduits en langage non technique.
         """)
