@@ -39,7 +39,6 @@ jobs:
         run: pytest tests/ -v --tb=short --cov=api --cov=ml --cov-report=term-missing
         env:
           DUCKDB_PATH: ":memory:"
-          SEED_MOCK: "true"
           API_KEY: ""
 
   # ── 2. Build & Push images Docker ────────────────────────────────────────────
@@ -47,7 +46,7 @@ jobs:
     name: Build Docker
     runs-on: ubuntu-latest
     needs: test
-    if: github.ref == 'refs/heads/main'
+    if: ${{ false }}  # Désactivé — AWS non configuré, déploiement via Hugging Face Spaces
     permissions:
       contents: read
       id-token: write
@@ -83,6 +82,7 @@ jobs:
     name: Deploy ECS Fargate
     runs-on: ubuntu-latest
     needs: build
+    if: ${{ false }}  # Désactivé — AWS non configuré, déploiement via Hugging Face Spaces
     environment:
       name: production
       url: https://observatoire.roissypaysdefrance.fr
