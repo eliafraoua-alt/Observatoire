@@ -29,7 +29,7 @@ jobs:
         run: |
           pip install -r api/requirements.txt
           pip install -r ml/requirements.txt
-          pip install feedparser beautifulsoup4
+          pip install feedparser beautifulsoup4 requests spacy
           pip install pytest pytest-cov httpx ruff black mypy
 
       - name: Lint (ruff)
@@ -39,6 +39,7 @@ jobs:
         run: pytest tests/ -v --tb=short --cov=api --cov=ml --cov-report=term-missing
         env:
           DUCKDB_PATH: ":memory:"
+          SEED_MOCK: "true"
           API_KEY: ""
 
   # ── 2. Build & Push images Docker ────────────────────────────────────────────

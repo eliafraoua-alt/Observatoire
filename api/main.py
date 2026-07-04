@@ -54,7 +54,7 @@ def get_db() -> duckdb.DuckDBPyConnection:
     Chaque requête HTTP obtient sa propre connexion — thread-safe.
     L'appelant est responsable de fermer la connexion (via try/finally).
     """
-    return duckdb.connect(DB_PATH, read_only=True)
+    return duckdb.connect(DB_PATH, read_only=False)
 
 
 @asynccontextmanager
