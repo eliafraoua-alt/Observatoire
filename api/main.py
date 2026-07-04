@@ -48,14 +48,13 @@ def require_api_key(provided_key: str = Security(_api_key_header)) -> None:
         )
 
 
-_con: duckdb.DuckDBPyConnection | None = None
-
-
 def get_db() -> duckdb.DuckDBPyConnection:
-    global _con
-    if _con is None:
-        _con = duckdb.connect(DB_PATH, read_only=False)
-    return _con
+    """
+    Retourne une nouvelle connexion DuckDB en lecture seule par requête.
+    Chaque requête HTTP obtient sa propre connexion — thread-safe.
+    L'appelant est responsable de fermer la connexion (via try/finally).
+    """
+    return duckdb.connect(DB_PATH, read_only=True)
 
 
 @asynccontextmanager
@@ -71,12 +70,17 @@ async def lifespan(app: FastAPI):
             "en production sans définir API_KEY (voir .env.example)."
         )
 
-    con = get_db()
-    _ensure_schema(con)
-    _seed_mock_if_empty(con)
+    # Schéma et seeding nécessitent une connexion en écriture — uniquement au
+    # démarrage, avant que l'API ne serve des requêtes.
+    # Le seeding mock est conditionné à SEED_MOCK=true pour ne jamais injecter
+    # des données de test en production par erreur.
+    SEED_MOCK = os.environ.get("SEED_MOCK", "false").lower() == "true"
+    with duckdb.connect(DB_PATH, read_only=False) as con_init:
+        _ensure_schema(con_init)
+        if SEED_MOCK:
+            _seed_mock_if_empty(con_init)
     yield
-    if _con:
-        _con.close()
+    # Pas de singleton à fermer — chaque requête gère sa propre connexion.
 
 
 app = FastAPI(
@@ -193,18 +197,28 @@ def list_zae(
     """Liste toutes les ZAE avec leurs indicateurs d'emploi."""
     con = get_db()
 
-    where_clauses = ["source = 'nikonoff_2026'"]
-    if commune:
-        where_clauses.append(f"LOWER(commune) LIKE LOWER('%{commune}%')")
-    if evolution_min is not None:
-        where_clauses.append(f"evolution_pct >= {evolution_min}")
-    if evolution_max is not None:
-        where_clauses.append(f"evolution_pct <= {evolution_max}")
-
+    # Colonnes et ordre validés contre liste blanche — pas de paramètre lié
+    # possible pour les identifiants SQL (ORDER BY, noms de colonnes).
     allowed_cols = {"effectif_2026", "effectif_2021", "evolution_pct", "zone", "commune", "etab_2026"}
     if tri not in allowed_cols:
         tri = "effectif_2026"
     ordre_sql = "DESC" if ordre.lower() == "desc" else "ASC"
+
+    # Les valeurs de filtre utilisent des paramètres liés (?) — pas d'injection possible.
+    where_clauses = ["source = 'nikonoff_2026'"]
+    params: list = []
+
+    if commune:
+        where_clauses.append("LOWER(commune) LIKE LOWER(?)")
+        params.append(f"%{commune}%")
+    if evolution_min is not None:
+        where_clauses.append("evolution_pct >= ?")
+        params.append(evolution_min)
+    if evolution_max is not None:
+        where_clauses.append("evolution_pct <= ?")
+        params.append(evolution_max)
+
+    params.append(limit)
 
     sql = f"""
         SELECT zone, commune, effectif_2021, effectif_2026, evolution_pct,
@@ -212,10 +226,10 @@ def list_zae(
         FROM emploi_zae
         WHERE {' AND '.join(where_clauses)}
         ORDER BY {tri} {ordre_sql}
-        LIMIT {limit}
+        LIMIT ?
     """
     try:
-        rows = con.execute(sql).fetchall()
+        rows = con.execute(sql, params).fetchall()
     except Exception as e:
         raise HTTPException(500, str(e))
 

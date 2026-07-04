@@ -32,9 +32,15 @@ def build_feature_table(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     Construit la table de features à partir des données brutes du warehouse.
     Une ligne = une ZAE, avec toutes les variables explicatives.
     """
-    base = con.execute("""
-        SELECT zone, commune, effectif_2021, effectif_2026, evolution_pct,
-               etab_2021, etab_2026
+# Détection automatique des colonnes disponibles
+    cols = con.execute("PRAGMA table_info(emploi_zae)").df()["name"].tolist()
+    col_eff_2026 = "effectif_2026" if "effectif_2026" in cols else \
+                   next((c for c in cols if "effectif" in c and "2026" in c), None)
+    col_eff_2026_sel = col_eff_2026 if col_eff_2026 else "effectif_2021"
+
+    base = con.execute(f"""
+        SELECT zone, commune, effectif_2021, {col_eff_2026_sel} as effectif_2026,
+               evolution_pct, etab_2021, etab_2026
         FROM emploi_zae
         WHERE source = 'nikonoff_2026'
     """).df()
@@ -84,13 +90,29 @@ def build_feature_table(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
 def _enrich_geo_mock(df: pd.DataFrame) -> pd.DataFrame:
     """
     MOCK — à remplacer par une vraie jointure géographique (PostGIS / SIG agglo).
-    En attendant le référentiel SIG, on utilise une estimation déterministe
-    basée sur le nom de la zone pour rester reproductible en dev.
+
+    Les valeurs sont dérivées de façon déterministe depuis le nom de la zone
+    via un hash stable (hashlib), de sorte que :
+    - la même zone produit toujours les mêmes valeurs, quelle que soit la taille du DataFrame,
+    - l'ajout d'une nouvelle zone n'altère pas les valeurs des zones existantes.
+
+    Sans cette stabilité, np.random.seed(42) produisait des valeurs différentes
+    à chaque ajout de zone car le tableau redimensionné générait une séquence aléatoire
+    différente — rendant l'entraînement non reproductible.
     """
-    np.random.seed(42)
-    df["distance_gare_min"] = np.random.randint(5, 40, size=len(df))
-    df["accessible_tc"] = (df["distance_gare_min"] <= 15).astype(int)
-    df["distance_cdg_km"] = np.random.uniform(0.5, 25, size=len(df)).round(1)
+    import hashlib
+
+    def _geo_from_name(zone_name: str) -> tuple[int, float]:
+        """Dérive distance_gare_min et distance_cdg_km depuis le nom de zone."""
+        digest = int(hashlib.md5(zone_name.encode()).hexdigest(), 16)
+        dist_gare = 5 + (digest % 36)          # entier dans [5, 40]
+        dist_cdg  = round(0.5 + (digest >> 8 & 0xFFFF) / 0xFFFF * 24.5, 1)  # float dans [0.5, 25.0]
+        return dist_gare, dist_cdg
+
+    distances = df["zone"].apply(_geo_from_name)
+    df["distance_gare_min"] = distances.apply(lambda t: t[0])
+    df["distance_cdg_km"]   = distances.apply(lambda t: t[1])
+    df["accessible_tc"]     = (df["distance_gare_min"] <= 15).astype(int)
     return df
 
 

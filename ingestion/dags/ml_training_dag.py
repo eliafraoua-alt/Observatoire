@@ -123,6 +123,12 @@ def pipeline_ml_training():
                 "INSERT INTO ml_training_history VALUES (?, 'scoring_defaillance', 'auc', ?)",
                 [today, scoring_result["auc_cv_moyen"]],
             )
+        # Correctif : la métrique dévitalisation était silencieusement ignorée.
+        if devital_result.get("mae_loo"):
+            con.execute(
+                "INSERT INTO ml_training_history VALUES (?, 'devitalisation', 'mae_loo', ?)",
+                [today, devital_result["mae_loo"]],
+            )
 
         # Comparaison avec le mois précédent
         hist = con.execute("""

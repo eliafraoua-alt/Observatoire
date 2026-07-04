@@ -108,7 +108,7 @@ def valider_registre_flux() -> pd.DataFrame:
     return pd.DataFrame(resultats)
 
 
-
+def collecter_flux_rss(jours_recents: int = 7) -> pd.DataFrame:
     """
     Parcourt tous les flux RSS du registre, filtre sur les mots-clés
     territoriaux pour la presse nationale (la presse locale est gardée

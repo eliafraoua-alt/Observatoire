@@ -112,9 +112,8 @@ def predict_zone(zone_features: pd.DataFrame, horizon_years: int = 3) -> dict:
     pred_q50 = models["q50"].predict(X)[0]
     pred_q90 = models["q90"].predict(X)[0]
 
-    effectif_actuel = zone_features["effectif_2021"].values[0] * (
-        1 + zone_features.get("evolution_pct", pd.Series([0])).values[0] / 100
-    )
+    evolution = zone_features["evolution_pct"].values[0] if "evolution_pct" in zone_features.columns else 0
+    effectif_actuel = zone_features["effectif_2021"].values[0] * (1 + evolution / 100)
 
     # Conversion taux 5 ans → projection à horizon
     taux_annuel_q50 = (1 + pred_q50 / 100) ** (1 / 5) - 1
