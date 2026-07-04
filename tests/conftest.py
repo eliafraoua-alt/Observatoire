@@ -1,11 +1,11 @@
 """
 Configuration pytest partagée.
 
-Stratégie finale : connexion DuckDB partagée unique en mémoire.
-- Une seule connexion _SHARED_DB créée avec les tables et données mock.
-- get_db() patché pour retourner TOUJOURS cette même connexion.
-- Le lifespan FastAPI tourne avec sa propre connexion :memory: (inoffensif).
-- Les endpoints utilisent get_db() → notre connexion partagée → tables présentes.
+Stratégie v8 : fichier DuckDB partagé + commit explicite + nouvelles connexions.
+- DuckDB connections ne sont PAS thread-safe.
+- FastAPI exécute les endpoints dans des threads (anyio.to_thread.run_sync).
+- Solution : fichier partagé, commit explicite, get_db() crée une nouvelle
+  connexion au même fichier à chaque appel (thread-safe).
 """
 import sys
 import os
@@ -19,45 +19,52 @@ for sous_module in ["api", "ml", "nlp/extraction", "nlp/sources", "ingestion/scr
     if str(chemin) not in sys.path:
         sys.path.insert(0, str(chemin))
 
-# ── Variables d'env AVANT tout import de main ─────────────────────────────────
-# On utilise :memory: pour le lifespan (inoffensif — il crée sa propre DB).
-# get_db() sera patché pour retourner notre connexion partagée.
-os.environ["DUCKDB_PATH"] = ":memory:"
-os.environ["SEED_MOCK"] = "false"  # inutile — on seed manuellement ci-dessous
+# ── Chemin de la base de test ─────────────────────────────────────────────────
+_DB = "/tmp/obs_test.duckdb"
+if os.path.exists(_DB):
+    os.remove(_DB)
+# Supprimer aussi le fichier WAL s'il existe
+for ext in [".wal", ".tmp"]:
+    if os.path.exists(_DB + ext):
+        os.remove(_DB + ext)
+
+# CRITIQUE : définir DUCKDB_PATH AVANT d'importer main
+os.environ["DUCKDB_PATH"] = _DB
+os.environ["SEED_MOCK"] = "false"
 os.environ["API_KEY"] = ""
 
 import duckdb
 
-# ── Connexion partagée unique avec toutes les tables et données ───────────────
-_SHARED_DB = duckdb.connect(":memory:")
 
-def _setup_shared_db():
+def _setup_db():
+    """Crée les tables et insère les données, avec commit explicite."""
+    con = duckdb.connect(_DB)
     today = date.today().isoformat()
 
-    _SHARED_DB.execute("""
-        CREATE TABLE IF NOT EXISTS emploi_zae (
+    con.execute("""
+        CREATE TABLE emploi_zae (
             zone VARCHAR, commune VARCHAR,
             effectif_2021 INTEGER, effectif_2026 INTEGER,
             evolution_pct DOUBLE, etab_2021 INTEGER, etab_2026 INTEGER,
             source VARCHAR, date_extraction VARCHAR
         )
     """)
-    _SHARED_DB.execute("""
-        CREATE TABLE IF NOT EXISTS alertes_bodacc (
+    con.execute("""
+        CREATE TABLE alertes_bodacc (
             siret VARCHAR, denomination VARCHAR, commune VARCHAR,
             cp VARCHAR, type_avis VARCHAR, date_parution VARCHAR,
             alerte BOOLEAN, source VARCHAR, date_extraction VARCHAR
         )
     """)
-    _SHARED_DB.execute("""
-        CREATE TABLE IF NOT EXISTS anomaly_scores (
+    con.execute("""
+        CREATE TABLE anomaly_scores (
             zone VARCHAR, commune VARCHAR,
             anomaly_score DOUBLE, is_anomaly BOOLEAN,
             evolution_pct DOUBLE, effectif_2026 INTEGER
         )
     """)
-    _SHARED_DB.execute("""
-        CREATE TABLE IF NOT EXISTS presse_analysee (
+    con.execute("""
+        CREATE TABLE presse_analysee (
             titre VARCHAR, url VARCHAR, source VARCHAR,
             date_publication VARCHAR, date_extraction VARCHAR,
             theme_principal VARCHAR, theme_score DOUBLE,
@@ -81,26 +88,43 @@ def _setup_shared_db():
         ("Grande Couture Ouest",   "Gonesse",              167,  610, 265.3,  35, 180, "nikonoff_2026", today),
         ("Le Moulin",              "Roissy CDG",          1949, 2982,  53.0, 174, 170, "nikonoff_2026", today),
         ("ZA Sablons",             "Claye-Souilly",        345, 1066, 209.0,  82, 112, "nikonoff_2026", today),
-        ("Parc Brèche",            "Goussainville",       1480, 1568,   5.9, 102, 101, "nikonoff_2026", today),
+        ("Parc Breche",            "Goussainville",       1480, 1568,   5.9, 102, 101, "nikonoff_2026", today),
     ]
     for row in mock_data:
-        _SHARED_DB.execute("INSERT INTO emploi_zae VALUES (?,?,?,?,?,?,?,?,?)", list(row))
+        con.execute("INSERT INTO emploi_zae VALUES (?,?,?,?,?,?,?,?,?)", list(row))
 
-    _SHARED_DB.execute(
+    con.execute(
         "INSERT INTO alertes_bodacc VALUES (?,?,?,?,?,?,?,?,?)",
         ["12345678901234", "Transport Roissy SAS", "Gonesse", "95500",
          "LIQUIDATION", "2026-06-28", True, "bodacc", today]
     )
 
+    # Commit explicite pour s'assurer que les données sont persistées
+    con.commit()
+    con.close()
 
-_setup_shared_db()
 
-# ── Import de main APRÈS setup de l'env ───────────────────────────────────────
+_setup_db()
+
+# Vérification que le fichier est bien créé et contient des données
+_check = duckdb.connect(_DB)
+_n = _check.execute("SELECT COUNT(*) FROM emploi_zae").fetchone()[0]
+assert _n == 15, f"Base mal initialisée : {_n} lignes au lieu de 15"
+_check.close()
+
+# ── Import de main APRÈS setup ────────────────────────────────────────────────
 import main as _api_main
 
-# ── Patch de get_db : retourne TOUJOURS la connexion partagée ─────────────────
-# C'est la seule garantie que les endpoints voient les tables.
-_api_main.get_db = lambda: _SHARED_DB
+assert _api_main.DB_PATH == _DB, f"DB_PATH={_api_main.DB_PATH!r} != {_DB!r}"
+
+
+def _test_get_db():
+    """Nouvelle connexion thread-safe au fichier de test."""
+    return duckdb.connect(_DB)
+
+
+# Patch de get_db au niveau module
+_api_main.get_db = _test_get_db
 
 # ── Fixtures pytest ───────────────────────────────────────────────────────────
 import pytest
