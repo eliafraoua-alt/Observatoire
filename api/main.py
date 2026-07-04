@@ -687,7 +687,9 @@ def _ensure_schema(con: duckdb.DuckDBPyConnection):
             etab_2026       INTEGER,
             source          VARCHAR,
             date_extraction VARCHAR
-        );
+        )
+    """)
+    con.execute("""
         CREATE TABLE IF NOT EXISTS alertes_bodacc (
             siret           VARCHAR,
             denomination    VARCHAR,
@@ -698,7 +700,17 @@ def _ensure_schema(con: duckdb.DuckDBPyConnection):
             alerte          BOOLEAN,
             source          VARCHAR,
             date_extraction VARCHAR
-        );
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS anomaly_scores (
+            zone            VARCHAR,
+            commune         VARCHAR,
+            anomaly_score   DOUBLE,
+            is_anomaly      BOOLEAN,
+            evolution_pct   DOUBLE,
+            effectif_2026   INTEGER
+        )
     """)
 
 
